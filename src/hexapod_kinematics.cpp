@@ -45,7 +45,7 @@ Eigen::Quaterniond rpy_to_quaternion(Eigen::Vector3d rpy)
 
 Eigen::Vector3d quaternion_to_rpy(Eigen::Quaterniond quat)
 {
-  return quat.toRotationMatrix().eulerAngles(2, 1, 0).reverse();
+  return quat.toRotationMatrix().canonicalEulerAngles(2, 1, 0).reverse();
 }
 
 static std::array<Eigen::Vector3d, NUM_STRUTS> dummy_joint_info;
@@ -90,7 +90,6 @@ forward_kinematics_impl(
   Eigen::Vector3d q_trans, RMatrix_a, RMatrix_a_cross_Strut;
 
   Eigen::Matrix<double, NUM_STRUTS, NUM_STRUTS> Jacobian;
-  Eigen::Matrix<double, NUM_STRUTS, NUM_STRUTS> InverseJacobian;
   Eigen::Matrix<double, NUM_STRUTS, 1> StrutLengthDiff;
   Eigen::Matrix<double, NUM_STRUTS, 1> delta;
   double InvKinStrutLength;
@@ -136,7 +135,7 @@ forward_kinematics_impl(
       /* we can't converge */
       throw Exception(HEXKINS_TOO_MANY_ITERATIONS, "Too many iterations");
     }
-
+    
     /* Convert q_RPY to Rotation Matrix */
     RMatrix = rpy_to_quaternion(q_RPY).toRotationMatrix();
 
@@ -167,20 +166,17 @@ forward_kinematics_impl(
       /* Determine RMatrix_a_cross_strut */
       RMatrix_a_cross_Strut = RMatrix_a.cross(InvKinStrutVectUnit);
 
-      /* Build Inverse Jacobian Matrix */
-      InverseJacobian.row(i).segment(0, 3) = InvKinStrutVectUnit;
-      InverseJacobian.row(i).segment(3, 3) = RMatrix_a_cross_Strut;
+      /* Build Jacobian Matrix */
+      Jacobian.row(i).segment(0, 3) = InvKinStrutVectUnit;
+      Jacobian.row(i).segment(3, 3) = RMatrix_a_cross_Strut;
     }
 
-    /* invert Inverse Jacobian */
-    Jacobian = InverseJacobian.inverse();
+    /* Find delta */
+    delta = Jacobian.colPivHouseholderQr().solve(StrutLengthDiff * (-1));
 
-    /* multiply Jacobian by LegLengthDiff */
-    delta = Jacobian * StrutLengthDiff;
-
-    /* subtract delta from last iterations pos values */
-    q_trans -= delta.segment(0, 3);
-    q_RPY -= delta.segment(3, 3);
+    /* Add delta from last iterations pos values */
+    q_trans += delta.segment(0, 3);
+    q_RPY += delta.segment(3, 3);
 
     /* determine value of conv_error (used to determine if no convergence) */
     conv_err = 0.0;
@@ -227,8 +223,8 @@ forward_kinematics(
     joints.begin(),
     joints.end(), 0.0, [](double a, double b) {return a + b;}) / NUM_STRUTS;
   double jitter_amt = avg_arm_length / 50.0;
-  std::normal_distribution<double> pos_jt(-jitter_amt, jitter_amt);
-  std::normal_distribution<double> rot_jt(-0.2, 0.2);
+  std::normal_distribution<double> pos_jt(0, jitter_amt);
+  std::normal_distribution<double> rot_jt(0, 0.05);
 
   Eigen::Vector3d output_pos;
   Eigen::Quaterniond output_ori;
@@ -244,18 +240,17 @@ forward_kinematics(
       converged = false;
     }
 
-    double pos_diff = (output_pos - current_position).norm();
-    if (converged && (pos_diff < 5e-1) && output_ori.isApprox(current_orientation, 1e-1)) {
+    if (converged) {
       return {output_pos, output_ori};
     }
 
     // retry with jitter applied to input
     try_pos = current_position + Eigen::Vector3d({pos_jt(gen), pos_jt(gen), pos_jt(gen)});
 
-    auto random_rot = Eigen::AngleAxisd(rot_jt(gen), Eigen::Vector3d::UnitX()) *
+    auto random_rot = Eigen::AngleAxisd(rot_jt(gen), Eigen::Vector3d::UnitZ()) *
       Eigen::AngleAxisd(rot_jt(gen), Eigen::Vector3d::UnitY()) *
-      Eigen::AngleAxisd(rot_jt(gen), Eigen::Vector3d::UnitZ());
-    try_ori = current_orientation * random_rot;
+      Eigen::AngleAxisd(rot_jt(gen), Eigen::Vector3d::UnitX());
+    try_ori = random_rot * current_orientation;
   }
 
   throw ConvergenceFailure("Failed to converge after retries.");
