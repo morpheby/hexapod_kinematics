@@ -40,7 +40,7 @@ Eigen::Quaterniond rpy_to_quaternion(Eigen::Vector3d rpy)
   Eigen::AngleAxisd roll_angle(rpy[0], Eigen::Vector3d::UnitX());
   Eigen::AngleAxisd pitch_angle(rpy[1], Eigen::Vector3d::UnitY());
   Eigen::AngleAxisd yaw_angle(rpy[2], Eigen::Vector3d::UnitZ());
-  return yaw_angle * pitch_angle * roll_angle;
+  return Eigen::Quaterniond(yaw_angle) * Eigen::Quaterniond(pitch_angle) * Eigen::Quaterniond(roll_angle);
 }
 
 Eigen::Vector3d quaternion_to_rpy(Eigen::Quaterniond quat)
